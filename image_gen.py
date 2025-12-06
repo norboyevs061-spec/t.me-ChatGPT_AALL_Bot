@@ -7,7 +7,7 @@ from database import db_manager
 from locales import get_text
 from utils.keyboards import (get_main_menu_keyboard, get_image_size_keyboard,
                              get_image_style_keyboard, get_image_quantity_keyboard)
-from utils.decorators import rate_limit
+from utils.decorators import rate_limit 
 import config
 
 # Conversation states
@@ -17,7 +17,7 @@ class ImageGenerationService:
     """Image generation service"""
     
     @staticmethod
-    @rate_limit("image_generation")
+    @rate_limit("image_generation") # Premium limitlariga asoslangan cheklov qo'llaniladi
     async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Start image generation service"""
         user = update.effective_user
@@ -166,28 +166,6 @@ class ImageGenerationService:
     async def integrate_ai_api(prompt: str, size: str, style: str, quantity: str, language: str) -> str:
         """
         AI API integration point for image generation
-        
-        TODO: Integrate with DALL-E, Midjourney, Stable Diffusion, or other image generation API
-        
-        Example integration with OpenAI DALL-E:
-        ```
-        from openai import OpenAI
-        client = OpenAI(api_key=config.OPENAI_API_KEY)
-        
-        # Enhance prompt with style
-        enhanced_prompt = f"{prompt}, {style} style"
-        
-        response = client.images.generate(
-            model="dall-e-3",
-            prompt=enhanced_prompt,
-            size=size.replace("x", "×"),  # Format: "1024×1024"
-            n=int(quantity)
-        )
-        
-        # Return image URLs
-        image_urls = [img.url for img in response.data]
-        return "\n".join(image_urls)
-        ```
         """
         # Placeholder result
         return f"[Image Generation Placeholder]\n\nPrompt: {prompt}\nSize: {size}\nStyle: {style}\nQuantity: {quantity}\n\n[Add API integration here to generate actual images]"
