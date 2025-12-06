@@ -1,0 +1,558 @@
+"""
+Database Manager - Handles all database interactions
+"""
+from datetime import datetime, timedelta
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy import select, update, func, extract
+
+from database.models import Base, User, ServiceUsage, RequestLog, UserLimit, PremiumPackage, Payment, PromoCode
+import config
+import logging
+
+logger = logging.getLogger(__name__)
+
+# Database initialization
+engine = create_async_engine(config.DATABASE_URL, echo=False)
+async_session = sessionmaker(
+    engine, expire_on_commit=False, class_=AsyncSession
+)
+
+async def init_db():
+    """Initialize the database and create tables"""
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(insert_default_packages)
+
+async def insert_default_packages(engine):
+    """Insert default premium packages from config"""
+    async with async_session() as session:
+        for key, pkg_data in config.PREMIUM_PACKAGES.items():
+            result = await session.execute(
+                select(PremiumPackage).where(PremiumPackage.package_key == key)
+            )
+            if not result.scalar_one_or_none():
+                new_package = PremiumPackage(
+                    package_key=key,
+                    name_uz=pkg_data['name_uz'],
+                    name_ru=pkg_data['name_ru'],
+                    price=pkg_data['price'],
+                    duration_days=pkg_data['duration_days'],
+                    is_free=pkg_data['is_free']
+                )
+                session.add(new_package)
+                logger.info(f"Inserted default premium package: {key}")
+        await session.commit()
+
+# --- USER MANAGEMENT ---
+
+async def get_or_create_user(telegram_id: int, username: str = None, first_name: str = None, last_name: str = None):
+    """Get or create user by Telegram ID and ensure they have a default package (Basic)"""
+    async with async_session() as session:
+        result = await session.execute(
+            select(User).where(User.telegram_id == telegram_id)
+        )
+        user = result.scalar_one_or_none()
+
+        if not user:
+            # 1. Get the default 'basic' package
+            package_result = await session.execute(
+                select(PremiumPackage).where(PremiumPackage.package_key == 'basic')
+            )
+            basic_package = package_result.scalar_one_or_none()
+            
+            # 2. Create the user with the basic package
+            user = User(
+                telegram_id=telegram_id,
+                username=username,
+                first_name=first_name,
+                last_name=last_name,
+                language='uz', # Default to 'uz' if not specified
+                package_id=basic_package.id if basic_package else None
+            )
+            session.add(user)
+            await session.commit()
+            logger.info(f"Created new user: {telegram_id}")
+        else:
+            # Update last active time
+            user.last_active = datetime.utcnow()
+            await session.commit()
+            
+        return user
+
+async def get_user(telegram_id: int) -> User | None:
+    """Get user object by Telegram ID"""
+    async with async_session() as session:
+        result = await session.execute(
+            select(User).where(User.telegram_id == telegram_id)
+        )
+        return result.scalar_one_or_none()
+
+async def get_user_language(telegram_id: int) -> str:
+    """Get user's language preference"""
+    user = await get_user(telegram_id)
+    return user.language if user else 'uz'
+
+async def set_user_language(telegram_id: int, language_code: str):
+    """Set user's language preference"""
+    async with async_session() as session:
+        result = await session.execute(
+            select(User).where(User.telegram_id == telegram_id)
+        )
+        user = result.scalar_one_or_none()
+        if user:
+            user.language = language_code
+            await session.commit()
+            return True
+        return False
+
+# --- PREMIUM & LIMITS MANAGEMENT ---
+
+async def is_user_premium(telegram_id: int) -> bool:
+    """Check if user has an active premium subscription"""
+    user = await get_user(telegram_id)
+    if not user:
+        return False
+    
+    # Premium is active if is_premium is True AND expiry date is in the future
+    if user.is_premium and user.premium_expiry and user.premium_expiry > datetime.utcnow():
+        return True
+    
+    # If the expiry date passed, deactivate premium status
+    if user.is_premium and user.premium_expiry and user.premium_expiry <= datetime.utcnow():
+        await deactivate_premium(telegram_id)
+        return False
+        
+    return False
+
+async def get_user_package_key(telegram_id: int) -> str:
+    """Get user's current package key (e.g., 'pro', 'basic')"""
+    async with async_session() as session:
+        result = await session.execute(
+            select(User)
+            .where(User.telegram_id == telegram_id)
+        )
+        user = result.scalar_one_or_none()
+
+        if user and user.package_id:
+            package_result = await session.execute(
+                select(PremiumPackage.package_key)
+                .where(PremiumPackage.id == user.package_id)
+            )
+            return package_result.scalar_one_or_none() or 'basic'
+        return 'basic'
+
+async def check_rate_limit(telegram_id: int, service_name: str) -> tuple[bool, int, int]:
+    """
+    Check if the user is allowed to make a request based on their package limit.
+    Returns (is_allowed, used, limit)
+    """
+    user = await get_user(telegram_id)
+    if not user:
+        return False, 0, 0
+    
+    package_key = await get_user_package_key(telegram_id)
+    
+    # 1. Get package limit
+    package_limits = config.PREMIUM_PACKAGES.get(package_key, config.PREMIUM_PACKAGES['basic'])['limits']
+    limit = package_limits.get(service_name, 0)
+    
+    # If limit is -1 (unlimited)
+    if limit == -1:
+        return True, 0, -1
+
+    # 2. Get current usage for the day/month (Assuming all limits are daily/monthly based on service type)
+    limit_type = 'daily' # Simplified for now, can be expanded to monthly for high-cost services
+    
+    async with async_session() as session:
+        # Check if limits need to be reset (Daily reset)
+        reset_time = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        
+        result = await session.execute(
+            select(UserLimit)
+            .where(UserLimit.user_id == user.id, 
+                   UserLimit.service_name == service_name)
+        )
+        user_limit = result.scalar_one_or_none()
+        
+        if user_limit:
+            if user_limit.last_reset < reset_time:
+                user_limit.usage_count = 0
+                user_limit.last_reset = datetime.utcnow()
+                await session.commit()
+            
+            used_count = user_limit.usage_count
+        else:
+            # Create new limit record
+            user_limit = UserLimit(
+                user_id=user.id,
+                service_name=service_name,
+                limit_type=limit_type,
+                usage_count=0
+            )
+            session.add(user_limit)
+            await session.commit()
+            used_count = 0
+
+    return used_count < limit, used_count, limit
+
+async def increment_usage(telegram_id: int, service_name: str):
+    """Increment the usage counter for a service"""
+    user = await get_user(telegram_id)
+    if not user:
+        return
+
+    # 1. Update UserLimit count
+    async with async_session() as session:
+        result = await session.execute(
+            select(UserLimit)
+            .where(UserLimit.user_id == user.id, UserLimit.service_name == service_name)
+        )
+        user_limit = result.scalar_one_or_none()
+        
+        if user_limit:
+            user_limit.usage_count += 1
+            await session.commit()
+        
+        # 2. Update general ServiceUsage (kept for general stats compatibility)
+        usage_result = await session.execute(
+            select(ServiceUsage)
+            .where(ServiceUsage.user_id == user.id, ServiceUsage.service_name == service_name)
+        )
+        service_usage = usage_result.scalar_one_or_none()
+        
+        if service_usage:
+            service_usage.request_count += 1
+            await session.commit()
+        else:
+            new_usage = ServiceUsage(
+                user_id=user.id,
+                service_name=service_name,
+                request_count=1
+            )
+            session.add(new_usage)
+            await session.commit()
+
+# --- PAYMENT AND PROMO CODE MANAGEMENT ---
+
+async def create_pending_payment(telegram_id: int, package_key: str, amount: float) -> Payment | None:
+    """Creates a new pending payment record for manual confirmation"""
+    async with async_session() as session:
+        user_result = await session.execute(
+            select(User).where(User.telegram_id == telegram_id)
+        )
+        user = user_result.scalar_one_or_none()
+        
+        package_result = await session.execute(
+            select(PremiumPackage).where(PremiumPackage.package_key == package_key)
+        )
+        package = package_result.scalar_one_or_none()
+
+        if user and package:
+            payment = Payment(
+                user_id=user.id,
+                package_id=package.id,
+                amount=amount,
+                status='pending',
+                payment_method='card_transfer'
+            )
+            session.add(payment)
+            await session.commit()
+            await session.refresh(payment)
+            return payment
+        return None
+
+async def confirm_payment_and_activate_premium(payment_id: int, admin_id: int):
+    """Confirms a pending payment and activates premium/updates limits"""
+    async with async_session() as session:
+        payment_result = await session.execute(
+            select(Payment).where(Payment.id == payment_id, Payment.status == 'pending')
+        )
+        payment = payment_result.scalar_one_or_none()
+        
+        if not payment:
+            return False, None # Payment not found or already confirmed
+
+        user_result = await session.execute(
+            select(User).where(User.id == payment.user_id)
+        )
+        user = user_result.scalar_one_or_none()
+        
+        package_result = await session.execute(
+            select(PremiumPackage).where(PremiumPackage.id == payment.package_id)
+        )
+        package = package_result.scalar_one_or_none()
+
+        if user and package:
+            # 1. Update Payment status
+            payment.status = 'confirmed'
+            payment.confirmed_at = datetime.utcnow()
+            
+            # 2. Activate Premium for User
+            user.is_premium = True
+            user.package_id = package.id
+            
+            # Calculate expiry date (Renewal logic)
+            if user.premium_expiry and user.premium_expiry > datetime.utcnow():
+                # Extend existing premium
+                user.premium_expiry += timedelta(days=package.duration_days)
+            else:
+                # Start new premium
+                user.premium_expiry = datetime.utcnow() + timedelta(days=package.duration_days)
+
+            # 3. Reset/Update Limits for User based on the new package
+            await reset_user_limits(session, user.id, package.package_key)
+            
+            await session.commit()
+            return True, user.telegram_id
+        
+        return False, None
+
+async def reset_user_limits(session, user_db_id: int, package_key: str):
+    """Reset or update user limits based on the new package"""
+    package_limits = config.PREMIUM_PACKAGES.get(package_key, config.PREMIUM_PACKAGES['basic'])['limits']
+    
+    for service_name, limit_value in package_limits.items():
+        result = await session.execute(
+            select(UserLimit)
+            .where(UserLimit.user_id == user_db_id, UserLimit.service_name == service_name)
+        )
+        limit_record = result.scalar_one_or_none()
+
+        # Determine limit type (simplified: -1 is unlimited, others daily)
+        limit_type = 'unlimited' if limit_value == -1 else 'daily'
+        
+        if limit_record:
+            # If the service limit is not unlimited, reset count to 0
+            if limit_type != 'unlimited':
+                limit_record.usage_count = 0
+            limit_record.last_reset = datetime.utcnow()
+            limit_record.limit_type = limit_type
+        else:
+            # Create new limit record if it doesn't exist
+            new_limit = UserLimit(
+                user_id=user_db_id,
+                service_name=service_name,
+                usage_count=0,
+                limit_type=limit_type
+            )
+            session.add(new_limit)
+
+    await session.flush() # Ensure changes are prepared before session commit
+
+async def deactivate_premium(telegram_id: int):
+    """Deactivate premium subscription and switch user to 'basic' package"""
+    async with async_session() as session:
+        user_result = await session.execute(
+            select(User).where(User.telegram_id == telegram_id)
+        )
+        user = user_result.scalar_one_or_none()
+        
+        basic_package_result = await session.execute(
+            select(PremiumPackage).where(PremiumPackage.package_key == 'basic')
+        )
+        basic_package = basic_package_result.scalar_one_or_none()
+        
+        if user and basic_package:
+            user.is_premium = False
+            user.premium_expiry = None
+            user.package_id = basic_package.id
+            
+            # Reset/Update Limits for User to basic package limits
+            await reset_user_limits(session, user.id, 'basic')
+            
+            await session.commit()
+            return True
+        
+        return False
+
+async def get_payment_details(payment_id: int) -> tuple[dict, str] | None:
+    """Get payment details including user info"""
+    async with async_session() as session:
+        payment_result = await session.execute(
+            select(Payment, User, PremiumPackage.package_key)
+            .join(User, Payment.user_id == User.id)
+            .join(PremiumPackage, Payment.package_id == PremiumPackage.id)
+            .where(Payment.id == payment_id)
+        )
+        record = payment_result.first()
+        
+        if record:
+            payment, user, package_key = record
+            
+            details = {
+                'payment_id': payment.id,
+                'user_id': user.telegram_id,
+                'username': user.username,
+                'amount': payment.amount,
+                'package_key': package_key,
+                'status': payment.status,
+                'created_at': payment.created_at.strftime("%Y-%m-%d %H:%M:%S")
+            }
+            return details, user.language
+        return None
+
+# --- ADMIN STATS ---
+
+async def get_admin_stats():
+    """Get general bot and revenue statistics for admin panel"""
+    async with async_session() as session:
+        # 1. User Counts
+        total_users = await session.scalar(select(func.count(User.id)))
+        active_users = await session.scalar(
+            select(func.count(User.id))
+            .where(User.last_active >= datetime.utcnow() - timedelta(days=7)) # Active in last 7 days
+        )
+        premium_users = await session.scalar(
+            select(func.count(User.id))
+            .where(User.is_premium == True, 
+                   User.premium_expiry > datetime.utcnow())
+        )
+        
+        # 2. Service Usage (Global)
+        service_stats_result = await session.execute(
+            select(ServiceUsage.service_name, func.sum(ServiceUsage.request_count))
+            .group_by(ServiceUsage.service_name)
+        )
+        service_stats = dict(service_stats_result.all())
+
+        # 3. Revenue Stats
+        # Total confirmed revenue
+        total_revenue = await session.scalar(
+            select(func.sum(Payment.amount))
+            .where(Payment.status == 'confirmed')
+        )
+        
+        # Monthly confirmed revenue (Current month)
+        current_month = datetime.utcnow().month
+        current_year = datetime.utcnow().year
+        monthly_revenue = await session.scalar(
+            select(func.sum(Payment.amount))
+            .where(Payment.status == 'confirmed', 
+                   extract('month', Payment.confirmed_at) == current_month,
+                   extract('year', Payment.confirmed_at) == current_year)
+        ) or 0.0
+        
+        # Pending payments count
+        pending_payments_count = await session.scalar(
+            select(func.count(Payment.id))
+            .where(Payment.status == 'pending')
+        )
+
+        return {
+            'total_users': total_users,
+            'active_users': active_users,
+            'premium_users': premium_users,
+            'service_stats': service_stats,
+            'total_revenue': total_revenue or 0.0,
+            'monthly_revenue': monthly_revenue,
+            'pending_payments_count': pending_payments_count
+        }
+
+async def get_pending_payments() -> list[Payment]:
+    """Get a list of pending payments for admin review"""
+    async with async_session() as session:
+        result = await session.execute(
+            select(Payment, User.telegram_id, PremiumPackage.name_uz)
+            .join(User, Payment.user_id == User.id)
+            .join(PremiumPackage, Payment.package_id == PremiumPackage.id)
+            .where(Payment.status == 'pending')
+            .order_by(Payment.created_at.asc())
+        )
+        
+        payments_data = []
+        for payment, telegram_id, package_name in result.all():
+            payments_data.append({
+                'id': payment.id,
+                'telegram_id': telegram_id,
+                'package_name': package_name,
+                'amount': payment.amount,
+                'created_at': payment.created_at.strftime("%Y-%m-%d %H:%M:%S")
+            })
+        
+        return payments_data
+        
+async def get_all_packages() -> list[PremiumPackage]:
+    """Get all premium packages"""
+    async with async_session() as session:
+        result = await session.execute(select(PremiumPackage).order_by(PremiumPackage.price.asc()))
+        return result.scalars().all()
+
+# --- PROMO CODE LOGIC ---
+
+async def create_promo_code(code: str, discount: int = None, bonus_days: int = None, max_uses: int = 1, expiry_date: datetime = None) -> bool:
+    """Create a new promo code"""
+    async with async_session() as session:
+        new_promo = PromoCode(
+            code=code.upper(),
+            discount_percent=discount,
+            bonus_days=bonus_days,
+            max_uses=max_uses,
+            expiry_date=expiry_date
+        )
+        session.add(new_promo)
+        try:
+            await session.commit()
+            return True
+        except Exception:
+            await session.rollback()
+            return False
+
+async def get_promo_code(code: str) -> PromoCode | None:
+    """Get promo code object by code"""
+    async with async_session() as session:
+        result = await session.execute(
+            select(PromoCode).where(PromoCode.code == code.upper(), PromoCode.is_active == True)
+        )
+        promo = result.scalar_one_or_none()
+        
+        # Check expiry and max uses
+        if promo:
+            if promo.expiry_date and promo.expiry_date < datetime.utcnow():
+                promo.is_active = False
+                await session.commit()
+                return None
+            if promo.max_uses != 0 and promo.current_uses >= promo.max_uses:
+                promo.is_active = False
+                await session.commit()
+                return None
+        
+        return promo
+
+async def list_promo_codes() -> list[PromoCode]:
+    """List all promo codes"""
+    async with async_session() as session:
+        result = await session.execute(select(PromoCode).order_by(PromoCode.created_at.desc()))
+        return result.scalars().all()
+
+async def delete_promo_code(code: str) -> bool:
+    """Deactivate/soft delete a promo code"""
+    async with async_session() as session:
+        result = await session.execute(
+            select(PromoCode).where(PromoCode.code == code.upper())
+        )
+        promo = result.scalar_one_or_none()
+        if promo:
+            promo.is_active = False
+            await session.commit()
+            return True
+        return False
+        
+async def log_request(telegram_id: int, service_name: str, request_data: dict, status: str, error_message: str = None, processing_time: int = None):
+    """Log user request details"""
+    user = await get_user(telegram_id)
+    if not user:
+        return
+
+    async with async_session() as session:
+        new_log = RequestLog(
+            user_id=user.id,
+            service_name=service_name,
+            request_data=request_data,
+            status=status,
+            error_message=error_message,
+            processing_time=processing_time,
+            response_data={"status": status}
+        )
+        session.add(new_log)
+        await session.commit()
