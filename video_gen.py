@@ -7,7 +7,7 @@ from database import db_manager
 from locales import get_text
 from utils.keyboards import (get_main_menu_keyboard, get_video_length_keyboard,
                              get_video_style_keyboard, get_video_ratio_keyboard)
-from utils.decorators import rate_limit
+from utils.decorators import rate_limit 
 import config
 
 # Conversation states
@@ -17,7 +17,7 @@ class VideoCreationService:
     """Video creation service"""
     
     @staticmethod
-    @rate_limit("video_creation")
+    @rate_limit("video_creation") # Premium limitlariga asoslangan cheklov qo'llaniladi
     async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Start video creation service"""
         user = update.effective_user
@@ -166,31 +166,6 @@ class VideoCreationService:
     async def integrate_ai_api(description: str, length: str, style: str, ratio: str, language: str) -> str:
         """
         AI API integration point for video generation
-        
-        TODO: Integrate with Runway, Pika, Luma, or other video generation API
-        
-        Example integration with Runway:
-        ```
-        import requests
-        
-        url = "https://api.runwayml.com/v1/generate"
-        headers = {
-            "Authorization": f"Bearer {config.RUNWAY_API_KEY}",
-            "Content-Type": "application/json"
-        }
-        data = {
-            "prompt": description,
-            "duration": length,
-            "style": style,
-            "aspect_ratio": ratio
-        }
-        
-        response = requests.post(url, headers=headers, json=data)
-        result = response.json()
-        
-        # Return video URL or file
-        return result.get("video_url", "Video generation in progress")
-        ```
         """
         # Placeholder result
         return f"[Video Generation Placeholder]\n\nDescription: {description}\nLength: {length}\nStyle: {style}\nRatio: {ratio}\n\n[Add API integration here to generate actual video]"
