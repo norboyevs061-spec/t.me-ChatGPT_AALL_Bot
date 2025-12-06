@@ -6,7 +6,7 @@ from telegram.ext import ContextTypes, ConversationHandler
 from database import db_manager
 from locales import get_text
 from utils.keyboards import get_main_menu_keyboard, get_translation_language_keyboard
-from utils.decorators import rate_limit
+from utils.decorators import rate_limit 
 import config
 
 # Conversation states
@@ -16,7 +16,7 @@ class TranslationService:
     """Translation service"""
     
     @staticmethod
-    @rate_limit("translation")
+    @rate_limit("translation") # Premium limitlariga asoslangan cheklov qo'llaniladi
     async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Start translation service"""
         user = update.effective_user
@@ -133,23 +133,6 @@ class TranslationService:
     async def integrate_ai_api(text: str, source_lang: str, target_lang: str, ui_language: str) -> str:
         """
         AI API integration point for translation
-        
-        TODO: Integrate with OpenAI, DeepL, or Google Translate API
-        
-        Example integration with OpenAI:
-        ```
-        from openai import OpenAI
-        client = OpenAI(api_key=config.OPENAI_API_KEY)
-        
-        response = client.chat.completions.create(
-            model="gpt-4.1-mini",
-            messages=[
-                {"role": "system", "content": f"Translate the following text from {source_lang} to {target_lang}. Only provide the translation, no explanations."},
-                {"role": "user", "content": text}
-            ]
-        )
-        return response.choices[0].message.content
-        ```
         """
         # Placeholder translation
         return f"[Translation Placeholder]\n\nOriginal ({source_lang}): {text}\n\nTranslated to {target_lang}: [Add API integration here]"
