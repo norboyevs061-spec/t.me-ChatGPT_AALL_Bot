@@ -1,0 +1,33 @@
+"""
+Localization module for multi-language support
+"""
+from .uz import TRANSLATIONS as UZ_TRANSLATIONS
+from .ru import TRANSLATIONS as RU_TRANSLATIONS
+
+LANGUAGES = {
+    "uz": UZ_TRANSLATIONS,
+    "ru": RU_TRANSLATIONS
+}
+
+def get_text(language: str, key: str, **kwargs) -> str:
+    """
+    Get translated text for a given language and key
+    
+    Args:
+        language: Language code ('uz' or 'ru')
+        key: Translation key
+        **kwargs: Format arguments for the translation string
+    
+    Returns:
+        Translated and formatted string
+    """
+    translations = LANGUAGES.get(language, LANGUAGES["ru"])
+    text = translations.get(key, key)
+    
+    if kwargs:
+        try:
+            return text.format(**kwargs)
+        except KeyError:
+            return text
+    
+    return text
