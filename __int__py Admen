@@ -1,0 +1,6 @@
+"""
+Admin module
+"""
+from .panel import AdminPanel
+
+__all__ = ['AdminPanel']
