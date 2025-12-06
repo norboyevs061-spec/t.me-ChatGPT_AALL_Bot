@@ -10,16 +10,20 @@ load_dotenv()
 BOT_TOKEN = "8321556963:AAEELXHRLSnCtBFLy9_4-B3p15wsnylxWR4"
 
 # Admin Configuration
-ADMIN_IDS = [123456789]  # Add your Telegram user ID here
+ADMIN_IDS = [5163199584]  # SARDOR ID
+PAYMENT_ADMIN_ID = 5163199584 # SARDOR ID
 
 # Database Configuration
 DATABASE_URL = "sqlite+aiosqlite:///bot_database.db"
 
-# Payment Configuration (Manual Transfer) - NEW
-MANUAL_CARD_NUMBER = "8600 XXXXXXXX 1234"  # O'zingizning karta raqamingizni kiriting
-PAYMENT_ADMIN_ID = 123456789  # To'lov tasdiqlash xabarlari boradigan Admin ID
+# Payment Configuration (Manual Transfer) - YANGILANGAN!
+# Renderga yuklashda Environment Variable orqali o'qing (xavfsizlik uchun)
+MANUAL_CARD_NUMBER = os.getenv(
+    "MANUAL_CARD_NUMBER", 
+    "Norboyev Sardor 4463 0900 3664 3065" 
+)
 
-# --- PREMIUM CONFIGURATION (YANGI) ---
+# --- PREMIUM CONFIGURATION (Qolgan qismi o'zgarishsiz) ---
 PREMIUM_PACKAGES = {
     "basic": {
         "name_uz": "Asosiy", "name_ru": "Базовый",
@@ -45,7 +49,7 @@ PREMIUM_PACKAGES = {
     },
     "pro": {
         "name_uz": "Pro (Oylik)", "name_ru": "Pro (Месячный)",
-        "price": 50000,  # 50,000 UZS
+        "price": 50000,
         "duration_days": 30,
         "features": ["Chat (Cheksiz)", "Translation (Cheksiz)", "Text Gen (Cheksiz)", "Image Gen (100)", "Video Gen (10)"],
         "limits": {
@@ -56,7 +60,7 @@ PREMIUM_PACKAGES = {
     },
     "vip": {
         "name_uz": "VIP (Yillik)", "name_ru": "VIP (Годовой)",
-        "price": 450000,  # 450,000 UZS
+        "price": 450000,
         "duration_days": 365,
         "features": ["Barcha xizmatlar (Cheksiz)", "Yuqori sifatli natijalar", "Ustuvor qo'llab-quvvatlash"],
         "limits": {
@@ -101,11 +105,10 @@ DEEPL_API_KEY = os.getenv("DEEPL_API_KEY", "")
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
 RUNWAY_API_KEY = os.getenv("RUNWAY_API_KEY", "")
 
-# Premium Features (Eski RATE_LIMITS o'rniga qo'shilgan)
+# Premium Features
 PREMIUM_FEATURES = {
     "unlimited_requests": True,
     "priority_processing": True,
     "higher_quality": True,
     "exclusive_models": True
 }
-
