@@ -15,17 +15,60 @@ ADMIN_IDS = [123456789]  # Add your Telegram user ID here
 # Database Configuration
 DATABASE_URL = "sqlite+aiosqlite:///bot_database.db"
 
-# Rate Limits (requests per day for free users)
-RATE_LIMITS = {
-    "chat": 10,
-    "translation": 20,
-    "text_generation": 5,
-    "video_creation": 2,
-    "image_generation": 5,
-    "voice_music": 5
+# Payment Configuration (Manual Transfer) - NEW
+MANUAL_CARD_NUMBER = "8600 XXXXXXXX 1234"  # O'zingizning karta raqamingizni kiriting
+PAYMENT_ADMIN_ID = 123456789  # To'lov tasdiqlash xabarlari boradigan Admin ID
+
+# --- PREMIUM CONFIGURATION (YANGI) ---
+PREMIUM_PACKAGES = {
+    "basic": {
+        "name_uz": "Asosiy", "name_ru": "Базовый",
+        "price": 0,
+        "duration_days": 3650, 
+        "features": ["Chat", "Translation"],
+        "limits": {
+            "chat": 5, "translation": 10, "text_generation": 0,
+            "video_creation": 0, "image_generation": 0, "voice_music": 0
+        },
+        "is_free": True
+    },
+    "standard": {
+        "name_uz": "Standart", "name_ru": "Стандарт",
+        "price": 0, 
+        "duration_days": 3650,
+        "features": ["Chat", "Translation", "Text Generation"],
+        "limits": {
+            "chat": 10, "translation": 20, "text_generation": 5,
+            "video_creation": 0, "image_generation": 0, "voice_music": 0
+        },
+        "is_free": True
+    },
+    "pro": {
+        "name_uz": "Pro (Oylik)", "name_ru": "Pro (Месячный)",
+        "price": 50000,  # 50,000 UZS
+        "duration_days": 30,
+        "features": ["Chat (Cheksiz)", "Translation (Cheksiz)", "Text Gen (Cheksiz)", "Image Gen (100)", "Video Gen (10)"],
+        "limits": {
+            "chat": -1, "translation": -1, "text_generation": -1,
+            "video_creation": 10, "image_generation": 100, "voice_music": 20
+        },
+        "is_free": False
+    },
+    "vip": {
+        "name_uz": "VIP (Yillik)", "name_ru": "VIP (Годовой)",
+        "price": 450000,  # 450,000 UZS
+        "duration_days": 365,
+        "features": ["Barcha xizmatlar (Cheksiz)", "Yuqori sifatli natijalar", "Ustuvor qo'llab-quvvatlash"],
+        "limits": {
+            "chat": -1, "translation": -1, "text_generation": -1,
+            "video_creation": -1, "image_generation": -1, "voice_music": -1
+        },
+        "is_free": False
+    }
 }
 
-# Service Parameters
+
+# Service Parameters (unchanged)
 SERVICE_PARAMS = {
     "video_creation": {
         "length_options": ["5 seconds", "10 seconds", "15 seconds", "30 seconds"],
@@ -58,10 +101,11 @@ DEEPL_API_KEY = os.getenv("DEEPL_API_KEY", "")
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
 RUNWAY_API_KEY = os.getenv("RUNWAY_API_KEY", "")
 
-# Premium Configuration
+# Premium Features (Eski RATE_LIMITS o'rniga qo'shilgan)
 PREMIUM_FEATURES = {
     "unlimited_requests": True,
     "priority_processing": True,
     "higher_quality": True,
     "exclusive_models": True
 }
+
