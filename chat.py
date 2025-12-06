@@ -6,7 +6,7 @@ from telegram.ext import ContextTypes, ConversationHandler
 from database import db_manager
 from locales import get_text
 from utils.keyboards import get_main_menu_keyboard
-from utils.decorators import rate_limit
+from utils.decorators import rate_limit 
 import config
 
 # Conversation states
@@ -16,7 +16,7 @@ class ChatService:
     """Chat Q&A service"""
     
     @staticmethod
-    @rate_limit("chat")
+    @rate_limit("chat") # Premium limitlariga asoslangan cheklov qo'llaniladi
     async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Start chat service"""
         user = update.effective_user
@@ -69,23 +69,6 @@ class ChatService:
     async def integrate_ai_api(question: str, language: str) -> str:
         """
         AI API integration point for chat
-        
-        TODO: Integrate with OpenAI, Claude, or other LLM API
-        
-        Example integration with OpenAI:
-        ```
-        from openai import OpenAI
-        client = OpenAI(api_key=config.OPENAI_API_KEY)
-        
-        response = client.chat.completions.create(
-            model="gpt-4.1-mini",
-            messages=[
-                {"role": "system", "content": f"You are a helpful assistant. Respond in {language}."},
-                {"role": "user", "content": question}
-            ]
-        )
-        return response.choices[0].message.content
-        ```
         """
         # Placeholder response
         return f"[AI Response Placeholder]\n\nYour question: {question}\n\nTo integrate real AI, add your API key to config.py and implement the API call in the integrate_ai_api method."
