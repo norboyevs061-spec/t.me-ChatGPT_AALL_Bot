@@ -51,6 +51,7 @@ from services.voice_music import (
     ENTERING_MUSIC_PROMPT,
     SELECTING_MUSIC_STYLE
 )
+from services.premium import SELECTING_PACKAGE, ENTERING_PROMO, WAITING_FOR_PAYMENT # NEW
 
 # Configure logging
 logging.basicConfig(
@@ -65,8 +66,8 @@ async def start_command(update: Update, context):
     """Handle /start command"""
     user = update.effective_user
     
-    # Create or get user
-    await db_manager.get_or_create_user(
+    # Create or get user and ensure basic package is set
+    user_obj = await db_manager.get_or_create_user(
         telegram_id=user.id,
         username=user.username,
         first_name=user.first_name,
@@ -74,7 +75,7 @@ async def start_command(update: Update, context):
     )
     
     # Check if user has language preference
-    language = await db_manager.get_user_language(user.id)
+    language = user_obj.language
     
     if not language or language == 'ru':
         # Show language selection
@@ -91,11 +92,11 @@ async def start_command(update: Update, context):
 
 
 async def help_command(update: Update, context):
-    """Handle /help command"""
+    """Handle /help command (Updated help text)"""
     user = update.effective_user
     language = await db_manager.get_user_language(user.id)
     
-    help_text = """
+    help_text = f"""
 🤖 Telegram AI Bot Help
 
 Available Services:
@@ -112,10 +113,15 @@ Commands:
 /help - Show this help message
 /stats - Show your usage statistics
 /language - Change language
+/premium - Show premium packages
 
 Admin Commands (admin only):
-/admin_stats - Show bot statistics
-/grant_premium <user_id> <days> - Grant premium
+/admin_stats - Show bot, revenue and usage statistics
+/list_payments - List pending payments for manual confirmation
+/confirm_payment <id> - Confirm payment and activate premium
+/create_promo <code> <discount%> [max] [days] - Create a promo code
+/list_promos - List existing promo codes
+/grant_premium <user_id> <days> [package] - Grant premium
 /revoke_premium <user_id> - Revoke premium
 /list_users [limit] - List recent users
 /broadcast <message> - Send message to all users
@@ -125,54 +131,50 @@ Admin Commands (admin only):
 
 
 async def stats_command(update: Update, context):
-    """Handle /stats command - show user statistics"""
+    """Handle /stats command - show user statistics (Now shows package and limits)"""
     user = update.effective_user
     language = await db_manager.get_user_language(user.id)
     
-    # Get user's service usage
-    async with db_manager.async_session() as session:
-        from sqlalchemy import select, func
-        from database.models import User, ServiceUsage
-        
-        result = await session.execute(
-            select(User).where(User.telegram_id == user.id)
-        )
-        user_obj = result.scalar_one_or_none()
-        
-        if not user_obj:
-            await update.message.reply_text(get_text(language, "error"))
-            return
-        
-        # Get service usage
-        result = await session.execute(
-            select(ServiceUsage).where(ServiceUsage.user_id == user_obj.id)
-        )
-        usage_records = result.scalars().all()
+    # Get user object
+    user_obj = await db_manager.get_user(user.id)
+    if not user_obj:
+        await update.message.reply_text(get_text(language, "error"))
+        return
+
+    # Get package and limits
+    package_key = await db_manager.get_user_package_key(user.id)
+    package_config = config.PREMIUM_PACKAGES.get(package_key, config.PREMIUM_PACKAGES['basic'])
     
-    # Format statistics
     stats_text = f"📊 Your Statistics\n\n"
-    stats_text += f"Premium Status: {'✅ Active' if user_obj.is_premium else '❌ Inactive'}\n"
+    stats_text += f"**Package**: {package_config[f'name_{language}']}\n"
+    stats_text += f"**Premium Status**: {'✅ Active' if user_obj.is_premium else '❌ Inactive'}\n"
+    stats_text += f"**Expiry Date**: {user_obj.premium_expiry.strftime('%Y-%m-%d %H:%M:%S') if user_obj.premium_expiry else 'N/A'}\n"
     stats_text += f"Member Since: {user_obj.created_at.strftime('%Y-%m-%d')}\n\n"
-    stats_text += f"Service Usage:\n"
     
-    if usage_records:
-        for usage in usage_records:
-            stats_text += f"  • {usage.service_name}: {usage.request_count} requests\n"
-    else:
-        stats_text += "  No usage yet\n"
+    stats_text += f"**Daily Usage Limits (Remaining/Total)**:\n"
     
-    await update.message.reply_text(stats_text)
+    for service_name, limit in package_config['limits'].items():
+        if limit == -1:
+            usage_text = "∞ / ∞"
+        else:
+            is_allowed, used, total_limit = await db_manager.check_rate_limit(user.id, service_name)
+            remaining = total_limit - used
+            usage_text = f"{remaining}/{total_limit}"
+
+        stats_text += f"  • {service_name.replace('_', ' ').title()}: {usage_text}\n"
+    
+    await update.message.reply_text(stats_text, parse_mode='Markdown')
 
 
 async def language_command(update: Update, context):
-    """Handle /language command - change language"""
+    """Handle /language command - change language (Unchanged)"""
     await update.message.reply_text(
         "Tilni tanlang / Выберите язык:",
         reply_markup=get_language_keyboard()
     )
 
 
-# Callback query handler for language selection
+# Callback query handler for language selection (Unchanged)
 async def language_callback(update: Update, context):
     """Handle language selection callback"""
     query = update.callback_query
@@ -196,7 +198,7 @@ async def language_callback(update: Update, context):
 
 # Message router for main menu
 async def handle_main_menu(update: Update, context):
-    """Route messages from main menu to appropriate service"""
+    """Route messages from main menu to appropriate service or Premium/Admin flows"""
     user = update.effective_user
     language = await db_manager.get_user_language(user.id)
     message_text = update.message.text
@@ -215,9 +217,10 @@ async def handle_main_menu(update: Update, context):
     elif message_text == get_text(language, "service_voice"):
         return await VoiceMusicService.start(update, context)
     elif message_text == get_text(language, "service_premium"):
+        # Redirect to the entry point of the Premium Conversation Handler
         return await PremiumService.show_info(update, context)
     else:
-        # Unknown command
+        # Unknown command - Show main menu (Fallback)
         await update.message.reply_text(
             get_text(language, "main_menu"),
             reply_markup=get_main_menu_keyboard(language)
@@ -238,9 +241,14 @@ def main():
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("stats", stats_command))
     application.add_handler(CommandHandler("language", language_command))
+    application.add_handler(CommandHandler("premium", PremiumService.show_info)) # Added command
     
-    # Admin command handlers
+    # Admin command handlers (Updated/New)
     application.add_handler(CommandHandler("admin_stats", AdminPanel.show_stats))
+    application.add_handler(CommandHandler("list_payments", AdminPanel.list_pending_payments))
+    application.add_handler(CommandHandler("confirm_payment", AdminPanel.confirm_payment))
+    application.add_handler(CommandHandler("create_promo", AdminPanel.create_promo_code_command))
+    application.add_handler(CommandHandler("list_promos", AdminPanel.list_promo_codes_command))
     application.add_handler(CommandHandler("grant_premium", AdminPanel.grant_premium))
     application.add_handler(CommandHandler("revoke_premium", AdminPanel.revoke_premium))
     application.add_handler(CommandHandler("list_users", AdminPanel.list_users))
@@ -249,96 +257,20 @@ def main():
     # Language selection callback
     application.add_handler(CallbackQueryHandler(language_callback, pattern="^lang_"))
     
-    # Chat service conversation handler
-    chat_handler = ConversationHandler(
-        entry_points=[MessageHandler(filters.TEXT & ~filters.COMMAND, handle_main_menu)],
+    # Premium purchase conversation handler (NEW)
+    premium_handler = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex(get_text('uz', "service_premium")) | filters.Regex(get_text('ru', "service_premium")), PremiumService.show_info)],
         states={
-            WAITING_QUESTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, ChatService.process_question)]
+            SELECTING_PACKAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, PremiumService.select_package)],
+            ENTERING_PROMO: [MessageHandler(filters.TEXT & ~filters.COMMAND, PremiumService.enter_promo)],
+            WAITING_FOR_PAYMENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, PremiumService.payment_confirmation_request)]
         },
-        fallbacks=[CommandHandler("start", start_command)],
-        name="chat_conversation",
+        fallbacks=[CommandHandler("start", start_command), MessageHandler(filters.Regex(get_text('uz', "back")) | filters.Regex(get_text('ru', "back")), PremiumService.show_info)],
+        name="premium_conversation",
         persistent=False,
         allow_reentry=True
     )
-    
-    # Translation service conversation handler
-    translation_handler = ConversationHandler(
-        entry_points=[MessageHandler(filters.TEXT & ~filters.COMMAND, handle_main_menu)],
-        states={
-            WAITING_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, TranslationService.receive_text)],
-            SELECTING_SOURCE: [MessageHandler(filters.TEXT & ~filters.COMMAND, TranslationService.select_source_language)],
-            SELECTING_TARGET: [MessageHandler(filters.TEXT & ~filters.COMMAND, TranslationService.select_target_language)]
-        },
-        fallbacks=[CommandHandler("start", start_command)],
-        name="translation_conversation",
-        persistent=False,
-        allow_reentry=True
-    )
-    
-    # Text generation conversation handler
-    textgen_handler = ConversationHandler(
-        entry_points=[MessageHandler(filters.TEXT & ~filters.COMMAND, handle_main_menu)],
-        states={
-            SELECTING_TYPE: [MessageHandler(filters.TEXT & ~filters.COMMAND, TextGenerationService.select_type)],
-            ENTERING_TOPIC: [MessageHandler(filters.TEXT & ~filters.COMMAND, TextGenerationService.enter_topic)],
-            SELECTING_LENGTH: [MessageHandler(filters.TEXT & ~filters.COMMAND, TextGenerationService.select_length)],
-            SELECTING_TONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, TextGenerationService.select_tone)]
-        },
-        fallbacks=[CommandHandler("start", start_command)],
-        name="textgen_conversation",
-        persistent=False,
-        allow_reentry=True
-    )
-    
-    # Video creation conversation handler
-    video_handler = ConversationHandler(
-        entry_points=[MessageHandler(filters.TEXT & ~filters.COMMAND, handle_main_menu)],
-        states={
-            VIDEO_DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, VideoCreationService.enter_description)],
-            VIDEO_LENGTH: [MessageHandler(filters.TEXT & ~filters.COMMAND, VideoCreationService.select_length)],
-            VIDEO_STYLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, VideoCreationService.select_style)],
-            SELECTING_RATIO: [MessageHandler(filters.TEXT & ~filters.COMMAND, VideoCreationService.select_ratio)]
-        },
-        fallbacks=[CommandHandler("start", start_command)],
-        name="video_conversation",
-        persistent=False,
-        allow_reentry=True
-    )
-    
-    # Image generation conversation handler
-    image_handler = ConversationHandler(
-        entry_points=[MessageHandler(filters.TEXT & ~filters.COMMAND, handle_main_menu)],
-        states={
-            ENTERING_PROMPT: [MessageHandler(filters.TEXT & ~filters.COMMAND, ImageGenerationService.enter_prompt)],
-            SELECTING_SIZE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ImageGenerationService.select_size)],
-            IMAGE_STYLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ImageGenerationService.select_style)],
-            SELECTING_QUANTITY: [MessageHandler(filters.TEXT & ~filters.COMMAND, ImageGenerationService.select_quantity)]
-        },
-        fallbacks=[CommandHandler("start", start_command)],
-        name="image_conversation",
-        persistent=False,
-        allow_reentry=True
-    )
-    
-    # Voice & Music conversation handler
-    voice_handler = ConversationHandler(
-        entry_points=[MessageHandler(filters.TEXT & ~filters.COMMAND, handle_main_menu)],
-        states={
-            SELECTING_MODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, VoiceMusicService.select_mode)],
-            VOICE_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, VoiceMusicService.enter_text)],
-            SELECTING_VOICE_STYLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, VoiceMusicService.select_voice_style)],
-            SELECTING_VOICE_LANG: [MessageHandler(filters.TEXT & ~filters.COMMAND, VoiceMusicService.select_voice_language)],
-            ENTERING_MUSIC_PROMPT: [MessageHandler(filters.TEXT & ~filters.COMMAND, VoiceMusicService.enter_music_prompt)],
-            SELECTING_MUSIC_STYLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, VoiceMusicService.select_music_style)]
-        },
-        fallbacks=[CommandHandler("start", start_command)],
-        name="voice_conversation",
-        persistent=False,
-        allow_reentry=True
-    )
-    
-    # Note: Due to ConversationHandler limitations, we use a single handler approach
-    # In production, consider using a state machine or separate entry points
+    application.add_handler(premium_handler)
     
     # Main message handler
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_main_menu))
