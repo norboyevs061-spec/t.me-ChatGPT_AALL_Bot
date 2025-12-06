@@ -8,7 +8,7 @@ from locales import get_text
 from utils.keyboards import (get_main_menu_keyboard, get_voice_mode_keyboard,
                              get_voice_style_keyboard, get_voice_language_keyboard,
                              get_music_style_keyboard)
-from utils.decorators import rate_limit
+from utils.decorators import rate_limit 
 import config
 
 # Conversation states
@@ -19,7 +19,7 @@ class VoiceMusicService:
     """Voice and music service"""
     
     @staticmethod
-    @rate_limit("voice_music")
+    @rate_limit("voice_music") # Premium limitlariga asoslangan cheklov qo'llaniladi
     async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Start voice & music service"""
         user = update.effective_user
@@ -248,28 +248,6 @@ class VoiceMusicService:
     async def integrate_tts_api(text: str, style: str, voice_lang: str, ui_language: str) -> str:
         """
         AI API integration point for text-to-speech
-        
-        TODO: Integrate with ElevenLabs, OpenAI TTS, or other TTS API
-        
-        Example integration with OpenAI TTS:
-        ```
-        from openai import OpenAI
-        from pathlib import Path
-        
-        client = OpenAI(api_key=config.OPENAI_API_KEY)
-        
-        response = client.audio.speech.create(
-            model="tts-1",
-            voice="alloy",  # Map style to voice
-            input=text
-        )
-        
-        # Save audio file
-        speech_file = Path("speech.mp3")
-        response.stream_to_file(speech_file)
-        
-        return str(speech_file)
-        ```
         """
         # Placeholder result
         return f"[TTS Placeholder]\n\nText: {text}\nStyle: {style}\nLanguage: {voice_lang}\n\n[Add API integration here to generate actual audio]"
@@ -278,29 +256,6 @@ class VoiceMusicService:
     async def integrate_music_api(prompt: str, style: str, language: str) -> str:
         """
         AI API integration point for music generation
-        
-        TODO: Integrate with Suno, MusicGen, or other music generation API
-        
-        Example integration with Suno (hypothetical):
-        ```
-        import requests
-        
-        url = "https://api.suno.ai/v1/generate"
-        headers = {
-            "Authorization": f"Bearer {config.SUNO_API_KEY}",
-            "Content-Type": "application/json"
-        }
-        data = {
-            "prompt": prompt,
-            "style": style,
-            "duration": 30
-        }
-        
-        response = requests.post(url, headers=headers, json=data)
-        result = response.json()
-        
-        return result.get("audio_url", "Music generation in progress")
-        ```
         """
         # Placeholder result
         return f"[Music Generation Placeholder]\n\nPrompt: {prompt}\nStyle: {style}\n\n[Add API integration here to generate actual music]"
