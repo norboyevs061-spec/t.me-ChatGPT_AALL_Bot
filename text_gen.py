@@ -7,7 +7,7 @@ from database import db_manager
 from locales import get_text
 from utils.keyboards import (get_main_menu_keyboard, get_text_type_keyboard,
                              get_text_length_keyboard, get_text_tone_keyboard)
-from utils.decorators import rate_limit
+from utils.decorators import rate_limit 
 import config
 
 # Conversation states
@@ -17,7 +17,7 @@ class TextGenerationService:
     """Text generation service"""
     
     @staticmethod
-    @rate_limit("text_generation")
+    @rate_limit("text_generation") # Premium limitlariga asoslangan cheklov qo'llaniladi
     async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Start text generation service"""
         user = update.effective_user
@@ -166,25 +166,6 @@ class TextGenerationService:
     async def integrate_ai_api(content_type: str, topic: str, length: str, tone: str, language: str) -> str:
         """
         AI API integration point for text generation
-        
-        TODO: Integrate with OpenAI GPT, Claude, or other LLM API
-        
-        Example integration with OpenAI:
-        ```
-        from openai import OpenAI
-        client = OpenAI(api_key=config.OPENAI_API_KEY)
-        
-        prompt = f"Write a {content_type} about {topic}. Length: {length}. Tone: {tone}. Language: {language}"
-        
-        response = client.chat.completions.create(
-            model="gpt-4.1-mini",
-            messages=[
-                {"role": "system", "content": "You are a professional content writer."},
-                {"role": "user", "content": prompt}
-            ]
-        )
-        return response.choices[0].message.content
-        ```
         """
         # Placeholder text
         return f"[Generated Text Placeholder]\n\nType: {content_type}\nTopic: {topic}\nLength: {length}\nTone: {tone}\n\n[Add API integration here to generate actual content]"
